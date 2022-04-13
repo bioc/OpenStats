@@ -31,7 +31,7 @@ asFactorAndSelectVariable <- function(x = NULL, col = NULL) {
 
 ML2REML <- function(x, debug = FALSE) {
   if (!is.null(x) &&
-    is(x, c("lme", "gls"))) {
+      is0(x, c("lme", "gls"))) {
     if (debug) {
       message0("\tRecovering the REML object from ML ...")
     }
@@ -52,9 +52,38 @@ ML2REML <- function(x, debug = FALSE) {
   return(x)
 }
 
+ks.test0 <- function (x, ...) {
+	r <- tryCatch(
+		expr = ks.test(x,...),
+		error = function(e) {
+			message0("\t\tCannot perform ks.test(). See: ")
+			message0("\t\t", e, breakLine = FALSE)
+			return(NULL)
+		},
+		warning = function(w) {
+			message0("\t\tCannot perform ks,test(). See: ")
+			message0("\t\t", w, breakLine = FALSE)
+			return(NULL)
+		}
+	)
+}
+
+is0 = function(obj = NULL, class2 = NULL) {
+  r = FALSE
+  if (is.null(obj) ||
+      is.null(class2) ||
+      length(class2) < 1)
+    return (r)
+
+  for (cl2 in class2) {
+    r = r || is(obj, cl2)
+  }
+  return(r)
+}
+
 REML2ML <- function(x, debug = FALSE) {
   if (!is.null(x) &&
-    is(x, c("lme", "gls"))) {
+      is0(x, c("lme", "gls"))) {
     if (debug) {
       message0("\tCoverting REML object to ML ...")
     }
@@ -82,11 +111,11 @@ Matrix2List <- function(x, ...) {
     return(NULL)
   }
 
-  if (length(x) == 1 || is(x, "numeric")) {
+  if (length(x) == 1 || is0(x, "numeric")) {
     return(as.list(x))
   }
 
-  if (!is(x, "matrix")) {
+  if (!is0(x, "matrix")) {
     x <- as.matrix(x)
   }
   r <- as.list(unmatrix0(x, ...))
@@ -484,6 +513,41 @@ FormulaContainsFunction <- function(formula) {
   return(r)
 }
 
+dist1 = function(x) {
+  d <-
+    tryCatch(
+      expr = outer(unlist(x), unlist(x), "-"),
+      error = function(e) {
+        message0(
+          "\t\tError(s) in the (distance calculation - dist1 function) for the effect size estimation. See: "
+        )
+        message0("\t\t", e, breakLine = FALSE)
+        return(NULL)
+      },
+      warning = function(w) {
+        message0(
+          "\t\tWarning(s) in the (distance calculation - dist1 function for the effect size estimation. See: "
+        )
+        message0("\t\t", w, breakLine = FALSE)
+        return(NULL)
+      }
+    )
+
+  if (is.null(d)) {
+    return(NULL)
+  }
+  ###
+  d[upper.tri(d, diag = TRUE)] <- NA
+
+  if (all(is.na(d))) {
+    return(NULL)
+  }
+  minmax = c(max(d, na.rm = TRUE), min(d, na.rm = TRUE))
+  maxVal = minmax[which.max(abs(minmax))]
+
+  return(head(maxVal, 1))
+}
+
 percentageChangeCont <- function(model,
                                  data,
                                  variable,
@@ -762,19 +826,15 @@ eff.size <- function(object,
       )
     } else {
       # For categorical covariates it is the mean difference
-      MDiff <- max(dist(agr[, depVariable, drop = FALSE],
-        method = "maximum"
-      ),
-      na.rm = TRUE
-      )
+      MDiff <- dist1(agr[, depVariable, drop = FALSE])
       r <- resid(NModel)
       sd <- sd0(r, na.rm = TRUE)
       efSi <- list(
         "Value" = ifelse(!is.na(sd) &&
-          sd > 0, abs(MDiff) / sd, NA),
+          sd > 0 && !is.null(MDiff), MDiff / sd, NA),
         "Variable" = effOfInd,
         "Model" = printformula(formula(NModel)),
-        "Type" = "Mean differences",
+        "Type" = "Mean differences. Formula = (mu_treatment - mu_control)/sd(residuals)",
         "Percentage change" = PerChange
       )
     }
@@ -1266,6 +1326,7 @@ cat.eff.size <- function(xtb,
   return(out)
 }
 
+
 printVarFreqfromTable <- function(tbl) {
   if (is.null(tbl) || any(dim(tbl) < 1)) {
     return(NULL)
@@ -1411,7 +1472,7 @@ checkTableForFisherTest <- function(xtb,
 fisher.test0 <- function(x, formula, ci_levels, ...) {
   r <- tryCatch(
     do.call(fisher.test, listFun(
-      list = list(x = x, ...),
+      list = list(x = x, workspace = 2e8, ...),
       FUN = fisher.test
     )),
     error = function(e) {
@@ -1894,8 +1955,28 @@ decimalplaces <- function(x) {
   }
 }
 
-dataSignature <- function(formula, data, digits = 10) {
-  a.vars <- all_vars0(formula)
+names0 <- function(x) {
+  r <- if (is.null(x)) {
+    NULL
+  } else {
+    names(x)
+  }
+  return(r)
+}
+
+FormulaDataColNames <- function(formula = NULL, data = NULL) {
+  r <- if (is.null(formula)) {
+    names0(data)
+  } else {
+    all_vars0(formula)
+  }
+  return(r)
+}
+
+dataSignature <- function(formula = '.', data, digits = 10) {
+
+  a.vars <- FormulaDataColNames(formula = formula, data = data)
+
   if (!is.null(formula) &&
     !is.null(data) &&
     !is.null(a.vars) &&
@@ -1918,16 +1999,19 @@ dataSignature <- function(formula, data, digits = 10) {
           "]"
         )
       } else {
-        paste0(
-          name,
-          ":[",
-          pasteComma(
-            paste0(levels(d), "=", table(d)),
-            truncate           = FALSE,
-            trailingSpace      = FALSE
-          ),
-          "]"
-        )
+        if (length(d) > 0 &&
+            all(is.na(d)))
+          d = rep('AllNa', length(d))
+        d = as.factor(d)
+        paste0(name,
+               ":[",
+               pasteComma(
+                 paste0(levels(d), "=", table(d)),
+                 truncate           = FALSE,
+                 trailingSpace      = FALSE
+               ),
+               "]")
+
       }
     })
 
@@ -1945,7 +2029,8 @@ dataSignature <- function(formula, data, digits = 10) {
     res <- pasteComma(
       sort(unlist(res0), decreasing = FALSE),
       truncate      = FALSE,
-      trailingSpace = FALSE
+      trailingSpace = FALSE,
+      sep = '|'
     )
   } else {
     res <- paste0(
@@ -2760,9 +2845,9 @@ intervalsCon <- function(object, lvls, ...) {
     " ..."
   )
   ci <- lapply(lvls, function(x) {
-    citerms <- if (is(object, "lme")) {
+    citerms <- if (is0(object, "lme")) {
       c("all", "fixed", "var-cov")
-    } else if (is(object, "gls")) {
+    } else if (is0(object, "gls")) {
       c("all", "coef", "var-cov")
     } else {
       c("all")
@@ -3402,13 +3487,15 @@ sd01 <- function(x, na.rm = TRUE) {
   }
 }
 
-normality.test0 <- function(x, ...) {
+normality.test0 <- function(x, message = FALSE, ...) {
   if (!is.null(x) &&
     is.numeric(x) &&
     length(x) > 3 &&
     !is.na(sd0(x, na.rm = TRUE)) &&
     length(unique(na.omit(x))) > 3 &&
     sd0(x, na.rm = TRUE) > 0) {
+    if (message)
+      message0('The normality test result/p-value should be considered carefully.')
     #################### Shapiro
     if (length(x) < 5000) {
       r <- list(
@@ -3423,28 +3510,34 @@ normality.test0 <- function(x, ...) {
       )
     } else {
       #################### Kolmogorov-Smirnov
-      precision <- 4 + decimalplaces(x = min(x, na.rm = TRUE))
+      precision <- 3 + decimalplaces(x = min(x, na.rm = TRUE))
+      ksresult <- ks.test0(
+      	x = jitter(
+      		x = x,
+      		amount = precision
+      	),
+      	y = "pnorm",
+      	alternative = "two.sided",
+      	...
+      )$p.value
       r <- list(
-        "P-value" = ks.test(
-          x = jitter(
-            x = x,
-            amount = precision
-          ),
-          y = "pnorm",
-          alternative = "two.sided",
-          ...
-        )$p.value,
-        "Unique N" = length(unique(na.omit(x))),
-        "N" = length(x),
-        "Unique N/N percent" = UniqueRatio(x),
-        "Mean" = mean0(x),
-        "SD" = sd01(x),
-        "Test" = "Kolmogorov-Smirnov",
-        "Note" = paste0(
-          "Small jitter (precision = ",
-          precision,
-          " decimals) added to possible ties (duplicates)."
-        )
+      	"P-value" = ksresult,
+      	"Unique N" = length(unique(na.omit(x))),
+      	"N" = length(x),
+      	"Unique N/N percent" = UniqueRatio(x),
+      	"Mean" = mean0(x),
+      	"SD" = sd01(x),
+      	"Test" = "Kolmogorov-Smirnov",
+      	"Note" = paste0(
+      		ifelse(
+      			is.null(ksresult),
+      			'Cannot calculate ks.test() even with small',
+      			'Small'
+      		),
+      		" jitter (precision = ",
+      		precision,
+      		" decimals) added to possible ties (duplicates)."
+      	)
       )
     }
   } else {
@@ -4262,7 +4355,7 @@ USerManualSlotName <- function(x, name = "OpenStats") {
   if (length(xn) < 1) {
     return(NULL)
   }
-  
+
   for (i in seq_along(xn)) {
     cat("    ", i, ". ", xn[i], "  \n")
   }
@@ -4439,4 +4532,74 @@ seq_along0 <- function(x, makeZero = TRUE) {
     s <- 1:0
   }
   return(s)
+}
+
+digit2Scientific <- function(x, digit = 3) {
+  if (!is.null(x)   &&
+      length(x) > 0 &&
+      is.numeric(x)) {
+    x[!is.na(x)] <-
+      format(x[!is.na(x)], scientific = TRUE, digits = digit)
+  }
+  return(x)
+}
+
+sortDataFrame <- function(x = NULL) {
+  if (is.null(x) ||
+      !is0(x, c("data.frame", "matrix"))) {
+    return(NULL)
+  } else {
+    return(x[, order(colnames(x)), drop = FALSE])
+  }
+}
+
+FeFurtherModels = function(x = NULL) {
+  if (is.null(x) ||
+      is.null(x$output$SplitModels))
+    return(NULL)
+  r = setNames(lapply(x$output$SplitModels, function(v) {
+    lapply0(
+      v,
+      FUN = function(v2) {
+        v3 <-
+          extractFisherSubTableResults(v2$result, what = c("p.value", "effect"))
+        v3
+      }
+    )
+  }),
+  nm = names(x$output$SplitModels))
+  return(r)
+}
+
+lapply1 <- function(X, FUN, ...) {
+  r <- lapply0(X = X, FUN = FUN, ...)
+  if (length(r) == 1) {
+    r <- r[[1]]
+  }
+  return(r)
+}
+
+extractFisherSubTableResults1 <- function(x, what = "p.value") {
+  r <- extractFisherSubTableResults(x = x, what = what)
+  if (length(r) == 1) {
+    r <- r[[1]]
+  }
+  return(r)
+}
+ReFurtherModels = function(x = NULL) {
+  if (is.null(x))
+    return(NULL)
+  r = setNames(lapply0(x, function(v) {
+    lapply1(
+      v,
+      FUN = function(v2) {
+        list(Result = extractFisherSubTableResults1(
+          x = v2$result,
+          what = c("p.value", "effect")
+        ),
+        RRextra = v2$RRextra)
+      }
+    )
+  }), nm = names(x))
+  return(r)
 }
